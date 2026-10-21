@@ -8,9 +8,6 @@
   <script src="https://www.gstatic.com/firebasejs/10.9.0/firebase-app-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.9.0/firebase-firestore-compat.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
-  <!-- 引入同目錄下的獨立 Firebase 設定檔與公版範本菜單檔 -->
-  <script src="firebaseConfig.js"></script>
-  <script src="defaultMenu.js"></script>
 <!-- [Section 1: 網頁宣告與資源引用] End -->
 
 <!-- [Section 2: CSS 樣式設定] Start -->
@@ -557,10 +554,13 @@
       <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px; border-bottom:1px solid var(--border); padding-bottom:10px; margin-bottom:14px;">
         <h3 style="border:none; padding:0; margin:0;">📂 菜單分類管理</h3>
         <div style="display:flex; gap:8px; flex-wrap:wrap;">
-          <button class="btn" style="background:#e11d48; color:#fff;" onclick="importDefaultMenuTemplate(true)">🔄 覆蓋重灌公版菜單 (清空舊菜＋帶入店名設定)</button>
-          <button class="btn" style="background:#4f46e5; color:#fff;" onclick="importDefaultMenuTemplate(false)">➕ 僅補齊缺少的公版菜色</button>
+          <button class="btn btn-danger-outline" onclick="clearExistingMenu()">🗑️ 清空現有菜單</button>
+          <button class="btn" style="background:#4f46e5; color:#fff;" onclick="importDefaultMenuTemplate()">📥 一鍵替換為新菜單</button>
         </div>
       </div>
+      <p style="font-size:13px; color:var(--sub); margin-bottom:10px;">替換會刪除現有分類與餐點，再匯入 defaultMenu.js；訂單與報表保留。請於停止接單時操作。</p>
+      <label style="display:block; font-size:14px; margin-bottom:10px;"><input type="checkbox" id="syncTemplateStoreInfo"> 同步更新店家基本資料（店名、電話、地址、營業時間、公休日與公告）</label>
+      <p id="menuImportStatus" role="status" aria-live="polite" style="font-size:13px; color:var(--sub); margin-bottom:12px;"></p>
       <div style="display:flex; gap:8px; margin-bottom:12px;">
         <input type="text" id="newCatNameInput" class="input-field" style="margin:0; max-width:260px;" placeholder="輸入新分類名稱 (例：清涼冷飲)">
         <button class="btn btn-blue" onclick="addMenuCategory()">＋ 新增分類</button>
@@ -726,20 +726,25 @@
 <!-- [Section 5: HTML 後台主介面與版面配置] End -->
 
 <!-- [Section 6: JS 系統變數與共用函式] Start -->
+  <script src="./firebaseConfig.js"></script>
+  <script src="./defaultMenu.js"></script>
   <script>
-    // 優先讀取外部獨立設定檔 (firebaseConfig.js)，若未載入則使用內建預設值防呆
-    const firebaseConfig = window.FIREBASE_CONFIG || {
-      apiKey: "AIzaSyAm2HTW9fmse5lXnzrkMyEQQYZpAzQoHD4",
-      authDomain: "liujia-689d7.firebaseapp.com",
-      projectId: "liujia-689d7",
-      storageBucket: "liujia-689d7.firebasestorage.app",
-      messagingSenderId: "376230897719",
-      appId: "1:376230897719:web:07481db92df75494d4b7b2"
-    };
-    if (!firebase.apps.length) {
-      firebase.initializeApp(firebaseConfig);
+    // 專案設定只由 firebaseConfig.js 提供；缺檔時停止啟動，避免連錯資料庫。
+    const connectionConfig = window.FIREBASE_CONFIG;
+    if (!connectionConfig || !connectionConfig.apiKey || !connectionConfig.projectId) {
+      alert("無法啟動後台：請確認同目錄的 firebaseConfig.js 已載入，且包含 FIREBASE_CONFIG、apiKey 與 projectId。");
+      throw new Error("Firebase 設定檔缺失或不完整");
     }
-    const db = firebase.firestore();
+    if (!window.firebase) {
+      alert("Firebase 程式庫載入失敗，請檢查網路後重新整理。");
+      throw new Error("Firebase SDK 未載入");
+    }
+    const backendApp = firebase.apps.length ? firebase.app() : firebase.initializeApp(connectionConfig);
+    if (backendApp.options.projectId !== connectionConfig.projectId) {
+      alert("Firebase 專案與設定檔不一致，已停止啟動，請重新整理頁面。");
+      throw new Error("Firebase 專案不一致");
+    }
+    const db = backendApp.firestore();
 
     // 全域狀態與雙軌訂單快取
     let allOrders = [];
@@ -792,6 +797,7 @@
     }
 
     function openConfirm(text, cb) {
+      if (confirmCallback) { cb(false); return; }
       document.getElementById("confirmText").innerText = text;
       confirmCallback = cb;
       document.getElementById("confirmModal").style.display = "flex";
@@ -799,7 +805,9 @@
 
     window.closeConfirm = function(result) {
       document.getElementById("confirmModal").style.display = "none";
-      if (confirmCallback) confirmCallback(result);
+      const callback = confirmCallback;
+      confirmCallback = null;
+      if (callback) callback(result);
     };
 
     function formatOrderDateTime(ts) {
@@ -1364,6 +1372,7 @@
 
     // ➕ 櫃台代客點餐 (POS)
     window.openPosModal = function() {
+      if (menuOperationBusy) return showToast("菜單處理中，請稍候再點餐。");
       posCart = [];
       const sel = document.getElementById("posTableSelect");
       sel.innerHTML = `<option value="TAKEOUT">🛍️ 外帶顧客</option>` +
@@ -1463,6 +1472,7 @@
     }
 
     window.submitPosOrder = async function() {
+      if (menuOperationBusy) return showToast("菜單處理中，請稍候再點餐。");
       if (!posCart.length) return showToast("⚠️ 請先選擇餐點！");
       const tableVal = document.getElementById("posTableSelect").value;
       let finalTableStr = "外帶顧客";
@@ -1668,11 +1678,13 @@
         adminCategories = snap.docs.map(d => ({ id: d.id, ...d.data() }));
         renderAdminCategories();
         renderAdminMenu();
+        updateMenuOperationUI();
       });
 
       db.collection("menu_items").onSnapshot(snap => {
         adminMenuItems = snap.docs.map(d => ({ id: d.id, ...d.data() }));
         renderAdminMenu();
+        updateMenuOperationUI();
       });
     }
 
@@ -1688,6 +1700,7 @@
     }
 
     window.addMenuCategory = async function() {
+      if (menuOperationBusy) return showToast("菜單處理中，請稍候。");
       const name = document.getElementById("newCatNameInput").value.trim();
       if (!name) return;
       await db.collection("menu_categories").add({
@@ -1700,82 +1713,135 @@
     };
 
     window.deleteMenuCategory = function(catId) {
+      if (menuOperationBusy) return showToast("菜單處理中，請稍候。");
       openConfirm("確定要刪除此分類嗎？", async (yes) => {
         if (!yes) return;
+        if (menuOperationBusy) return;
         await db.collection("menu_categories").doc(catId).delete();
         showToast("🗑️ 分類已刪除");
       });
     };
 
-    // 任務 2：新店一鍵載入公版範本菜單 (支援「覆蓋重灌清空舊菜」與「自動帶入店家資訊」)
-    window.importDefaultMenuTemplate = function(isOverwrite = true) {
-      const tpl = window.DEFAULT_MENU_TEMPLATE;
-      if (!tpl || !Array.isArray(tpl.categories) || !Array.isArray(tpl.items)) {
-        showToast("⚠️ 找不到公版菜單檔 (defaultMenu.js)！請確認已將 defaultMenu.js 放在相同目錄下。");
-        openConfirm("⚠️ 系統偵測不到公版菜單設定檔 (defaultMenu.js)！\n\n請確認您已將「defaultMenu.js」與「admin.html」放在同一個目錄（資料夾）下，並重新整理網頁後再試一次。", () => {});
-        return;
-      }
+    // 菜單批次操作：單次原子提交，拒絕拆批，避免刪完卻未匯入的半完成狀態。
+    let menuOperationBusy = false;
+    const MENU_WRITE_LIMIT = 450;
 
-      const templateCats = tpl.categories;
-      const templateItems = tpl.items;
-      const tplStore = tpl.store_info || null;
-      const storeTitleHint = tplStore && tplStore.store_name ? `【${tplStore.store_name}】` : "";
+    function updateMenuOperationUI() {
+      document.querySelectorAll("#tab_menu button, #tab_menu input, #menuEditModal button, #menuEditModal input, #menuEditModal select, #menuEditModal textarea")
+        .forEach(el => { el.disabled = menuOperationBusy; });
+    }
 
-      const confirmMsg = isOverwrite
-        ? `⚠️ 確定要執行「覆蓋重灌公版菜單」嗎？\n\n1. 這將會【徹底刪除並清空】目前資料庫中所有的舊分類與舊菜色！\n2. 接著寫入 defaultMenu.js ${storeTitleHint} 的 ${templateCats.length} 大分類與 ${templateItems.length} 道新餐點。\n${tplStore ? '3. 同步自動更新店名、電話、地址、營業時間與公休日設定。\n' : ''}(註：歷史訂單與營收報表不會受影響)`
-        : `確定要執行「僅補齊缺少的公版菜色」嗎？\n這會保留現有菜單，僅將 defaultMenu.js ${storeTitleHint} 中尚未出現的分類與餐點補齊。`;
+    function setMenuOperationStatus(message) {
+      document.getElementById("menuImportStatus").textContent = message;
+    }
 
-      openConfirm(confirmMsg, async (yes) => {
-        if (!yes) return;
-        try {
-          const batch = db.batch();
-
-          if (isOverwrite) {
-            // 1. 先將現有所有舊分類與舊菜色排入刪除佇列
-            adminCategories.forEach(oldCat => {
-              batch.delete(db.collection("menu_categories").doc(oldCat.id));
-            });
-            adminMenuItems.forEach(oldItem => {
-              batch.delete(db.collection("menu_items").doc(oldItem.id));
-            });
-
-            // 2. 寫入全新分類與全新菜色
-            templateCats.forEach(c => {
-              batch.set(db.collection("menu_categories").doc(), c);
-            });
-            templateItems.forEach(it => {
-              batch.set(db.collection("menu_items").doc(), it);
-            });
-
-            // 3. 若 defaultMenu.js 含有 store_info，一併自動更新店名、電話、地址與營業時間
-            if (tplStore) {
-              batch.set(db.collection("system_settings").doc("store_info"), tplStore, { merge: true });
-            }
-          } else {
-            // 附加模式：僅補齊沒有同名之分類與餐點
-            templateCats.forEach(c => {
-              if (!adminCategories.some(ec => ec.name === c.name)) {
-                batch.set(db.collection("menu_categories").doc(), c);
-              }
-            });
-            templateItems.forEach(it => {
-              if (!adminMenuItems.some(ei => ei.name === it.name)) {
-                batch.set(db.collection("menu_items").doc(), it);
-              }
-            });
-          }
-
-          await batch.commit();
-          showToast(isOverwrite
-            ? `🎉 已徹底清空舊菜單，並成功換上${storeTitleHint}全新菜單與店務設定！`
-            : `🎉 已成功補齊${storeTitleHint}缺少的公版菜色！`
-          );
-        } catch (e) {
-          console.error("匯入菜單失敗:", e);
-          showToast("匯入失敗，請檢查網路連線");
-        }
+    function validateMenuTemplate(template, syncStore) {
+      const fail = message => { throw new Error("菜單檔案格式錯誤：" + message); };
+      const text = value => typeof value === "string" && value.trim().length > 0;
+      const price = value => typeof value === "number" && Number.isFinite(value) && value >= 0;
+      if (!template || !Array.isArray(template.categories) || !template.categories.length ||
+          !Array.isArray(template.items) || !template.items.length) fail("必須包含非空的 categories 與 items。");
+      const names = new Set();
+      template.categories.forEach(c => {
+        if (!c || !text(c.name) || !Number.isFinite(c.sort_order) || typeof c.is_active !== "boolean") fail("分類須有名稱、數字排序與啟用狀態。");
+        if (names.has(c.name.trim())) fail("分類名稱重複：" + c.name);
+        names.add(c.name.trim());
       });
-    };
+      const itemKeys = new Set();
+      template.items.forEach(it => {
+        if (!it || !text(it.name) || !names.has(it.category_name) || !["fixed", "size", "dumpling"].includes(it.type)) fail("餐點名稱、分類或計價方式不正確。");
+        const key = JSON.stringify([it.category_name, it.name.trim()]);
+        if (itemKeys.has(key)) fail("同分類餐點重複：" + it.name);
+        itemKeys.add(key);
+        if (it.type === "size" ? !price(it.price_small) || !price(it.price_large) : !price(it.price)) fail(it.name + " 的價格不正確。");
+        if (it.type === "dumpling" && (!Number.isInteger(it.min_qty) || it.min_qty < 1)) fail(it.name + " 的最低數量不正確。");
+        if (typeof it.is_available !== "boolean" || !Array.isArray(it.addons) || it.addons.some(a => !a || !text(a.name) || !price(a.price))) fail(it.name + " 的供應狀態或加料不正確。");
+      });
+      if (syncStore) {
+        const info = template.store_info;
+        if (!info || !text(info.store_name) || ["store_phone", "store_address", "store_notice"].some(k => typeof info[k] !== "string") ||
+            !Array.isArray(info.hours) || info.hours.some(h => !text(h)) ||
+            !Array.isArray(info.closed_days) || info.closed_days.some(d => !Number.isInteger(d) || d < 0 || d > 6)) fail("店家基本資料不完整或公休日不正確。");
+      }
+    }
+
+    async function runMenuOperation(replace) {
+      if (menuOperationBusy) return;
+      menuOperationBusy = true;
+      updateMenuOperationUI();
+      let commitStarted = false;
+      try {
+        const syncStore = replace && document.getElementById("syncTemplateStoreInfo").checked;
+        let template;
+        if (replace) {
+          // 驗證原始數字後再複製，避免 NaN 在序列化時被悄悄轉成 null。
+          validateMenuTemplate(window.DEFAULT_MENU_TEMPLATE, syncStore);
+          template = JSON.parse(JSON.stringify(window.DEFAULT_MENU_TEMPLATE));
+        }
+        setMenuOperationStatus("正在讀取雲端菜單，準備確認內容…");
+        const [cats, items] = await Promise.all([
+          db.collection("menu_categories").get({ source: "server" }),
+          db.collection("menu_items").get({ source: "server" })
+        ]);
+        const oldCount = cats.size + items.size;
+        if (!replace && !oldCount) {
+          setMenuOperationStatus("目前沒有菜單可清除。");
+          return;
+        }
+        const writes = oldCount + (replace ? template.categories.length + template.items.length + (syncStore ? 1 : 0) : 0);
+        if (writes > MENU_WRITE_LIMIT) throw new Error("菜單資料量超過本頁單次安全處理範圍（450 筆寫入），已停止操作，請聯繫維護人員處理。");
+        const message = `Firebase 專案：${connectionConfig.projectId}\n將刪除現有 ${cats.size} 個分類、${items.size} 道餐點。` +
+          (replace ? `\n將匯入 ${template.categories.length} 個分類、${template.items.length} 道餐點。\n${syncStore ? "將同步更新店家基本資料。" : "保留目前店家基本資料。"}` : "") +
+          "\n訂單、報表、桌位與登入設定保留。\n請確認已停止接單，且其他管理者未同時編輯菜單。是否繼續？";
+        const yes = await new Promise(resolve => openConfirm(message, resolve));
+        if (!yes) {
+          setMenuOperationStatus("已取消，菜單未變更。");
+          return;
+        }
+        // 再讀一次最新雲端資料，避免確認期間新增的舊品項遺留。
+        const [latestCats, latestItems] = await Promise.all([
+          db.collection("menu_categories").get({ source: "server" }),
+          db.collection("menu_items").get({ source: "server" })
+        ]);
+        const signature = snap => snap.docs.map(d => JSON.stringify([d.id, d.data()])).sort().join("\n");
+        if (signature(cats) !== signature(latestCats) || signature(items) !== signature(latestItems)) {
+          throw new Error("確認期間雲端菜單已變更，請重新執行並確認最新內容。");
+        }
+        const batch = db.batch();
+        cats.docs.forEach(d => batch.delete(d.ref));
+        items.docs.forEach(d => batch.delete(d.ref));
+        if (replace) {
+          template.categories.forEach(c => batch.set(db.collection("menu_categories").doc(), c));
+          template.items.forEach(it => batch.set(db.collection("menu_items").doc(), it));
+          if (syncStore) {
+            const info = template.store_info;
+            const payload = {};
+            ["store_name", "store_phone", "store_address", "hours", "closed_days", "store_notice"].forEach(k => { payload[k] = info[k]; });
+            batch.set(db.collection("system_settings").doc("store_info"), payload, { merge: true });
+          }
+        }
+        setMenuOperationStatus("正在儲存，請勿關閉或重新整理頁面…");
+        commitStarted = true;
+        await batch.commit();
+        posCart = []; // 舊購物車的價格與品項已失效，避免送出舊菜單。
+        closePosModal();
+        closeMenuEditModal();
+        const result = replace ? `已替換為 ${template.categories.length} 個分類、${template.items.length} 道餐點${syncStore ? "，並同步店家基本資料" : ""}。` : "已清空所有菜單分類與餐點。";
+        setMenuOperationStatus(result);
+        showToast("✅ " + result);
+      } catch (error) {
+        console.error("菜單操作失敗", error);
+        const detail = error && error.message ? error.message : "請檢查設定、網路與資料庫寫入權限。";
+        setMenuOperationStatus((commitStarted ? "未確認儲存成功，請恢復連線並重新整理，確認雲端菜單後再操作。" : "操作未執行，原菜單保留。") + " " + detail);
+        showToast("❌ 菜單操作未完成，請查看菜單管理的說明。");
+      } finally {
+        menuOperationBusy = false;
+        updateMenuOperationUI();
+      }
+    }
+
+    window.clearExistingMenu = function() { return runMenuOperation(false); };
+    window.importDefaultMenuTemplate = function() { return runMenuOperation(true); };
 
     function renderAdminMenu() {
       const container = document.getElementById("adminMenuContainer");
@@ -1812,11 +1878,13 @@
     }
 
     window.toggleItemAvailable = async function(itemId, nextAvail) {
+      if (menuOperationBusy) return showToast("菜單處理中，請稍候。");
       await db.collection("menu_items").doc(itemId).update({ is_available: nextAvail });
       showToast(nextAvail ? "🟢 已恢復上架供應" : "🔴 已設為今日售完");
     };
 
     window.openMenuEditModal = function(itemId) {
+      if (menuOperationBusy) return showToast("菜單處理中，請稍候。");
       const catSel = document.getElementById("editItemCategory");
       catSel.innerHTML = adminCategories.map(c => `<option value="${c.name}">${c.name}</option>`).join('');
 
@@ -1859,6 +1927,7 @@
     };
 
     window.saveMenuItem = async function() {
+      if (menuOperationBusy) return showToast("菜單處理中，請稍候。");
       const id = document.getElementById("editItemId").value;
       const category_name = document.getElementById("editItemCategory").value;
       const name = document.getElementById("editItemName").value.trim();
@@ -1899,8 +1968,10 @@
     };
 
     window.deleteMenuItem = function(itemId) {
+      if (menuOperationBusy) return showToast("菜單處理中，請稍候。");
       openConfirm("確定要刪除此餐點品項嗎？", async (yes) => {
         if (!yes) return;
+        if (menuOperationBusy) return;
         await db.collection("menu_items").doc(itemId).delete();
         showToast("🗑️ 餐點已刪除");
       });
