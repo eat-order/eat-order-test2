@@ -10,6 +10,8 @@
   <title id="pageTitle">劉家川味牛肉麵 - 線上點餐</title>
   <script src="https://www.gstatic.com/firebasejs/10.9.0/firebase-app-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.9.0/firebase-firestore-compat.js"></script>
+  <!-- 引入同目錄下的獨立 Firebase 設定檔 -->
+  <script src="firebaseConfig.js"></script>
 <!-- [Section 1: 網頁宣告與資源引用] End -->
 
 <!-- [Section 2: CSS 樣式設定] Start -->
@@ -499,16 +501,28 @@
 
 <!-- [Section 7: JS 全域變數與初始化] Start -->
   <script>
-    const firebaseConfig = {
-      apiKey: "AIzaSyDNJj1wirszcZLeH_cdnGeaVw1eE9xojno",
-      authDomain: "eat-order-test2.firebaseapp.com",
-      projectId: "eat-order-test2",
-      storageBucket: "eat-order-test2.firebasestorage.app",
-      messagingSenderId: "1050930540405",
-      appId: "1:1050930540405:web:dc07c9895b5b15059d6d3c"
-    };
-    if (!firebase.apps.length) {
-      firebase.initializeApp(firebaseConfig);
+    // 各店連線設定只由同目錄的 firebaseConfig.js 提供。
+    // 不在此重新宣告 firebaseConfig，也不使用其他店家的內建設定。
+    function stopOrderingStartup(message) {
+      document.getElementById("menuContainer").textContent = message;
+      document.getElementById("displayTableNumber").textContent = "點餐服務尚未啟動";
+      throw new Error(message);
+    }
+    if (!window.FIREBASE_CONFIG ||
+        !["apiKey", "projectId", "appId"].every(key =>
+          typeof window.FIREBASE_CONFIG[key] === "string" && window.FIREBASE_CONFIG[key].trim())) {
+      stopOrderingStartup("無法載入店家連線設定。請確認同目錄的 firebaseConfig.js 存在，且已設定 window.FIREBASE_CONFIG，再重新整理。");
+    }
+    if (typeof firebase === "undefined" || typeof firebase.firestore !== "function") {
+      stopOrderingStartup("點餐連線元件載入失敗，請確認網路連線後重新整理。");
+    }
+    try {
+      if (!firebase.apps.length) {
+        firebase.initializeApp(window.FIREBASE_CONFIG);
+      }
+    } catch (error) {
+      console.error("店家連線初始化失敗：", error);
+      stopOrderingStartup("店家連線設定初始化失敗，請聯絡店家檢查 firebaseConfig.js。");
     }
     const db = firebase.firestore();
 
@@ -593,9 +607,10 @@
       const tabContainer = document.getElementById("categoryTabs");
       if (!categories.length) {
         tabContainer.innerHTML = "";
+        currentCategory = "";
         return;
       }
-      if (!currentCategory) currentCategory = categories[0].name;
+      if (!categories.some(cat => cat.name === currentCategory)) currentCategory = categories[0].name;
       tabContainer.innerHTML = categories.map(cat => `
         <button class="tab-btn ${cat.name === currentCategory ? 'active' : ''}" onclick="selectCategory('${cat.name}')">
           ${cat.name}
