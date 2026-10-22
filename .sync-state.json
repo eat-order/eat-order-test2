@@ -1,0 +1,14 @@
+
+{
+  "source_repository": "eat-order/eat-order-templete",
+  "source_branch": "main",
+  "last_synced_commit": "105cd14a1b3eac709c98554508190757f021f262",
+  "sync_files": [
+    "index.html",
+    "admin.html"
+  ],
+  "protected_files": [
+    "firebaseConfig.js",
+    "defaultMenu.js"
+  ]
+}
