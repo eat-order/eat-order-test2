@@ -1,8 +1,7 @@
-
 {
   "source_repository": "eat-order/eat-order-templete",
   "source_branch": "main",
-  "last_synced_commit": "105cd14a1b3eac709c98554508190757f021f262",
+  "last_synced_commit": "866df973a4298f7ed88ed6affcbf2a512c8ea8fa",
   "sync_files": [
     "index.html",
     "admin.html"
